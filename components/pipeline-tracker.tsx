@@ -36,7 +36,7 @@ export function PipelineTracker({ stage }: { stage: PipelineStage }) {
   const currentIndex = stageOrder.indexOf(stage as (typeof stageOrder)[number])
 
   return (
-    <div className="flex items-center gap-1 px-3 py-2 rounded-lg bg-secondary/50">
+    <div className="flex flex-wrap items-center gap-1 px-3 py-2 rounded-2xl border border-border/50 bg-card/70 shadow-soft backdrop-blur">
       {stages.map((s, i) => {
         const Icon = s.icon
         const isActive = s.key === stage
@@ -47,9 +47,9 @@ export function PipelineTracker({ stage }: { stage: PipelineStage }) {
           <div key={s.key} className="flex items-center gap-1">
             <div
               className={cn(
-                "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-all",
+                "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all",
                 isActive &&
-                  "bg-primary text-primary-foreground",
+                  "bg-primary text-primary-foreground shadow-[0_8px_24px_-16px_rgba(0,0,0,0.6)]",
                 isDone && "text-chart-2",
                 !isActive && !isDone && "text-muted-foreground"
               )}

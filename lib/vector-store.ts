@@ -1,23 +1,63 @@
 import { embed, embedMany, cosineSimilarity } from "ai"
-import { huggingface } from "@ai-sdk/huggingface"
+import { openai } from "@ai-sdk/openai"
 
 interface VectorDocument {
   text: string
-  embedding: number[]
+  textLower: string
+  embedding?: number[]
   source: string
 }
 
-interface VectorStore {
-  documents: VectorDocument[]
-  sources: Map<string, number>
+type VectorStoreBackend = "memory" | "faiss"
+
+const VECTOR_STORE: VectorStoreBackend =
+  process.env.VECTOR_STORE === "faiss" ? "faiss" : "memory"
+
+const memoryDocuments: VectorDocument[] = []
+const sources = new Map<string, number>()
+let totalChunks = 0
+let totalChars = 0
+
+const EMBEDDING_MODEL = openai.embedding(
+  process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small"
+)
+
+const EMBEDDINGS_ENABLED = getEnvBoolean("EMBEDDINGS_ENABLED", true)
+const EMBEDDINGS_FALLBACK = getEnvBoolean("EMBEDDINGS_FALLBACK", true)
+
+const CHUNK_SIZE = getEnvNumber("CHUNK_SIZE", 1000)
+const CHUNK_OVERLAP = getEnvNumber("CHUNK_OVERLAP", 100)
+const EFFECTIVE_OVERLAP = Math.min(
+  CHUNK_OVERLAP,
+  Math.max(0, Math.floor(CHUNK_SIZE / 2))
+)
+
+const MAX_TOTAL_CHUNKS = getEnvNumber("MAX_TOTAL_CHUNKS", 5000)
+const MAX_TOTAL_CHARS = getEnvNumber("MAX_TOTAL_CHARS", 2_000_000)
+
+type FaissStoreInstance = {
+  addDocuments: (docs: unknown[]) => Promise<void>
+  similaritySearchWithScore: (
+    query: string,
+    k: number
+  ) => Promise<[unknown, number][]>
 }
 
-const store: VectorStore = {
-  documents: [],
-  sources: new Map(),
+let faissStore: FaissStoreInstance | null = null
+let faissEmbeddings: unknown | null = null
+
+function getEnvNumber(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  const value = Number(raw)
+  return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-const EMBEDDING_MODEL = huggingface.textEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+function getEnvBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  return ["1", "true", "yes", "on"].includes(raw.toLowerCase())
+}
 
 function chunkText(
   text: string,
@@ -57,29 +97,155 @@ function chunkText(
   return chunks
 }
 
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter((token) => token.length >= 2)
+}
+
+function keywordSearch(
+  query: string,
+  docs: VectorDocument[],
+  topK: number
+): { text: string; score: number; source: string }[] {
+  const tokens = tokenize(query)
+  if (tokens.length === 0) return []
+
+  const scored = docs.map((doc) => {
+    let hits = 0
+    for (const token of tokens) {
+      if (doc.textLower.includes(token)) hits += 1
+    }
+    const score = hits / tokens.length
+    return {
+      text: doc.text,
+      source: doc.source,
+      score,
+    }
+  })
+
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, topK).filter((s) => s.score > 0)
+}
+
+async function getFaissEmbeddings() {
+  if (faissEmbeddings) return faissEmbeddings
+  const { OpenAIEmbeddings } = (await import("@langchain/openai")) as {
+    OpenAIEmbeddings: new (args: { model: string; apiKey?: string }) => unknown
+  }
+  faissEmbeddings = new OpenAIEmbeddings({
+    model: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
+    apiKey: process.env.OPENAI_API_KEY,
+  })
+  return faissEmbeddings
+}
+
+async function addDocumentFaiss(chunks: string[], fileName: string) {
+  const embeddings = await getFaissEmbeddings()
+  const { FaissStore } = (await import(
+    "@langchain/community/vectorstores/faiss"
+  )) as { FaissStore: new (embeddings: unknown, args?: unknown) => unknown }
+
+  const metadatas = chunks.map(() => ({ source: fileName }))
+
+  if (!faissStore) {
+    const store = await (FaissStore as any).fromTexts(
+      chunks,
+      metadatas,
+      embeddings
+    )
+    faissStore = store as FaissStoreInstance
+    return
+  }
+
+  const { Document } = (await import("@langchain/core/documents")) as {
+    Document: new (args: { pageContent: string; metadata?: Record<string, unknown> }) => unknown
+  }
+
+  const docs = chunks.map(
+    (chunk) =>
+      new Document({
+        pageContent: chunk,
+        metadata: { source: fileName },
+      })
+  )
+
+  await faissStore.addDocuments(docs)
+}
+
+async function searchFaiss(query: string, topK: number) {
+  if (!faissStore) return []
+  const results = await faissStore.similaritySearchWithScore(query, topK)
+  return results.map(([doc, distance]) => {
+    const typedDoc = doc as { pageContent?: string; metadata?: { source?: string } }
+    const similarity = 1 / (1 + distance)
+    return {
+      text: typedDoc.pageContent || "",
+      source: typedDoc.metadata?.source || "Unknown",
+      score: similarity,
+    }
+  })
+}
+
 export async function addDocument(
   text: string,
   fileName: string
 ): Promise<{ chunkCount: number }> {
-  const chunks = chunkText(text)
+  const chunks = chunkText(text, CHUNK_SIZE, EFFECTIVE_OVERLAP)
 
   if (chunks.length === 0) {
     return { chunkCount: 0 }
   }
 
-  const { embeddings } = await embedMany({
-    model: EMBEDDING_MODEL,
-    values: chunks,
-  })
+  const incomingChars = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  if (totalChunks + chunks.length > MAX_TOTAL_CHUNKS) {
+    throw new Error("Knowledge base size limit reached")
+  }
+  if (totalChars + incomingChars > MAX_TOTAL_CHARS) {
+    throw new Error("Knowledge base text limit reached")
+  }
+
+  let embeddings: number[][] | null = null
+
+  if (VECTOR_STORE === "faiss") {
+    if (EMBEDDINGS_ENABLED) {
+      try {
+        await addDocumentFaiss(chunks, fileName)
+      } catch (error) {
+        if (!EMBEDDINGS_FALLBACK) {
+          throw error
+        }
+        console.warn("Embeddings failed; falling back to keyword search.", error)
+      }
+    }
+  } else if (EMBEDDINGS_ENABLED) {
+    try {
+      const result = await embedMany({
+        model: EMBEDDING_MODEL,
+        values: chunks,
+      })
+      embeddings = result.embeddings
+    } catch (error) {
+      if (!EMBEDDINGS_FALLBACK) {
+        throw error
+      }
+      console.warn("Embeddings failed; falling back to keyword search.", error)
+    }
+  }
 
   const newDocs: VectorDocument[] = chunks.map((chunk, i) => ({
     text: chunk,
-    embedding: embeddings[i],
+    textLower: chunk.toLowerCase(),
+    embedding: embeddings ? embeddings[i] : undefined,
     source: fileName,
   }))
 
-  store.documents.push(...newDocs)
-  store.sources.set(fileName, (store.sources.get(fileName) || 0) + chunks.length)
+  memoryDocuments.push(...newDocs)
+
+  totalChunks += chunks.length
+  totalChars += incomingChars
+  sources.set(fileName, (sources.get(fileName) || 0) + chunks.length)
 
   return { chunkCount: chunks.length }
 }
@@ -88,8 +254,21 @@ export async function searchDocuments(
   query: string,
   topK = 5
 ): Promise<{ text: string; score: number; source: string }[]> {
-  if (store.documents.length === 0) {
+  if (totalChunks === 0) {
     return []
+  }
+
+  if (VECTOR_STORE === "faiss" && EMBEDDINGS_ENABLED && faissStore) {
+    const results = await searchFaiss(query, topK)
+    return results.filter((s) => s.score > 0.1)
+  }
+
+  if (!EMBEDDINGS_ENABLED) {
+    return keywordSearch(query, memoryDocuments, topK)
+  }
+
+  if (memoryDocuments.some((doc) => !doc.embedding || doc.embedding.length === 0)) {
+    return keywordSearch(query, memoryDocuments, topK)
   }
 
   const { embedding: queryEmbedding } = await embed({
@@ -97,7 +276,7 @@ export async function searchDocuments(
     value: query,
   })
 
-  const scored = store.documents.map((doc) => ({
+  const scored = memoryDocuments.map((doc) => ({
     text: doc.text,
     source: doc.source,
     score: cosineSimilarity(queryEmbedding, doc.embedding),
@@ -113,8 +292,8 @@ export function getStoreStats(): {
   sources: { name: string; chunks: number }[]
 } {
   return {
-    totalChunks: store.documents.length,
-    sources: Array.from(store.sources.entries()).map(([name, chunks]) => ({
+    totalChunks,
+    sources: Array.from(sources.entries()).map(([name, chunks]) => ({
       name,
       chunks,
     })),
@@ -122,6 +301,9 @@ export function getStoreStats(): {
 }
 
 export function clearStore(): void {
-  store.documents = []
-  store.sources.clear()
+  memoryDocuments.length = 0
+  sources.clear()
+  totalChunks = 0
+  totalChars = 0
+  faissStore = null
 }

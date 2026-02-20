@@ -55,14 +55,16 @@ export function KnowledgePanel({
   }
 
   return (
-    <Card className="h-full">
-      <CardHeader>
+    <Card className="h-full border-border/70 bg-card/70">
+      <CardHeader className="border-b border-border/50 pb-4">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Database className="size-4" />
+          <span className="flex size-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Database className="size-4" />
+          </span>
           Knowledge Base
         </CardTitle>
         <CardDescription>
-          Upload PDF documents to build your searchable knowledge base
+          Upload PDF documents to build a private, searchable knowledge base.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -79,20 +81,23 @@ export function KnowledgePanel({
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") inputRef.current?.click()
           }}
-          className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors ${
+          className={`group relative flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-6 cursor-pointer transition-all ${
             isDragging
-              ? "border-primary bg-primary/5"
-              : "border-border hover:border-primary/50 hover:bg-secondary/30"
+              ? "border-primary bg-primary/10 shadow-soft"
+              : "border-border/70 bg-background/40 hover:border-primary/50 hover:bg-secondary/40"
           }`}
         >
+          <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/10 via-transparent to-accent/10 opacity-0 transition-opacity group-hover:opacity-100" />
           {isUploading ? (
             <Loader2 className="size-8 text-primary animate-spin" />
           ) : (
-            <Upload className="size-8 text-muted-foreground" />
+            <Upload className="size-8 text-muted-foreground group-hover:text-primary transition-colors" />
           )}
           <div className="text-center">
             <p className="text-sm font-medium">
-              {isUploading ? "Processing PDF..." : "Drop PDF here or click to upload"}
+              {isUploading
+                ? "Processing PDF..."
+                : "Drop PDF here or click to upload"}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
               Supports .pdf files
@@ -111,7 +116,7 @@ export function KnowledgePanel({
         {files.length > 0 && (
           <>
             <div className="flex items-center justify-between">
-              <Badge variant="secondary" className="gap-1">
+              <Badge variant="secondary" className="gap-1 bg-secondary/70">
                 <Database className="size-3" />
                 {totalChunks} chunks indexed
               </Badge>
@@ -131,7 +136,7 @@ export function KnowledgePanel({
                 {files.map((file) => (
                   <div
                     key={file.name}
-                    className="flex items-center gap-3 rounded-md bg-secondary/50 p-3"
+                    className="flex items-center gap-3 rounded-xl bg-secondary/60 p-3 border border-border/50"
                   >
                     <FileText className="size-4 text-primary shrink-0" />
                     <div className="min-w-0 flex-1">

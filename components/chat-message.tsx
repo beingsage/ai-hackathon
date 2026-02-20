@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 interface ChatMessageProps {
   role: "user" | "assistant"
   content: string
+  showSpeechControls?: boolean
   isPlaying?: boolean
   isSpeechLoading?: boolean
   onPlaySpeech?: () => void
@@ -16,6 +17,7 @@ interface ChatMessageProps {
 export function ChatMessage({
   role,
   content,
+  showSpeechControls = true,
   isPlaying,
   isSpeechLoading,
   onPlaySpeech,
@@ -32,8 +34,10 @@ export function ChatMessage({
     >
       <div
         className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-full",
-          isUser ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
+          "flex size-9 shrink-0 items-center justify-center rounded-2xl border",
+          isUser
+            ? "bg-foreground text-background border-foreground/20 shadow-soft"
+            : "bg-card/80 text-foreground border-border/60"
         )}
         aria-hidden="true"
       >
@@ -47,15 +51,15 @@ export function ChatMessage({
       >
         <div
           className={cn(
-            "rounded-2xl px-4 py-3 text-sm leading-relaxed",
+            "rounded-2xl px-4 py-3 text-[0.95rem] leading-relaxed shadow-soft border",
             isUser
-              ? "bg-primary text-primary-foreground rounded-tr-sm"
-              : "bg-secondary text-secondary-foreground rounded-tl-sm"
+              ? "bg-foreground text-background border-foreground/20 rounded-tr-sm"
+              : "bg-card/80 text-foreground border-border/60 rounded-tl-sm"
           )}
         >
-          {content}
+          <span className={cn(!isUser && "font-serif")}>{content}</span>
         </div>
-        {!isUser && content && (
+        {!isUser && content && showSpeechControls && (
           <div className="flex items-center gap-1">
             {isSpeechLoading ? (
               <Button variant="ghost" size="icon-sm" disabled>

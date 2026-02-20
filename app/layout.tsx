@@ -1,10 +1,14 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Sora, Fraunces, JetBrains_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const sora = Sora({ subsets: ["latin"], variable: "--font-sora" })
+const fraunces = Fraunces({ subsets: ["latin"], variable: "--font-fraunces" })
+const jetbrains = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains",
+})
 
 export const metadata: Metadata = {
   title: 'VoiceRAG - Voice-Powered Document Intelligence',
@@ -36,7 +40,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="font-sans antialiased">
+      <body
+        className={`${sora.variable} ${fraunces.variable} ${jetbrains.variable} font-sans antialiased`}
+      >
         {children}
         <Analytics />
       </body>
